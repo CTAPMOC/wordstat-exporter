@@ -1,0 +1,419 @@
+﻿* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: #f5f6f8;
+  color: #15171a;
+  font-family:
+    Inter,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+}
+
+button,
+textarea,
+select {
+  font: inherit;
+}
+
+.app {
+  width: 100%;
+  min-height: 100vh;
+  padding: 48px 24px;
+}
+
+.panel {
+  width: min(960px, 100%);
+  margin: 0 auto;
+  padding: 36px;
+  background: #ffffff;
+  border: 1px solid #e7e8ea;
+  border-radius: 24px;
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.05);
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 40px;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: #777d87;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(32px, 5vw, 48px);
+  letter-spacing: -0.04em;
+}
+
+.description {
+  margin: 12px 0 0;
+  color: #696e76;
+  font-size: 16px;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  padding: 10px 14px;
+  background: #f3faf5;
+  border-radius: 100px;
+  color: #227640;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.statusDot {
+  width: 8px;
+  height: 8px;
+  background: #32aa5b;
+  border-radius: 50%;
+}
+
+.formGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.formGroup label {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.labelRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.labelRow span {
+  color: #858a92;
+  font-size: 13px;
+}
+
+textarea {
+  width: 100%;
+  min-height: 280px;
+  padding: 18px;
+  resize: vertical;
+  outline: none;
+  border: 1px solid #dfe1e5;
+  border-radius: 14px;
+  line-height: 1.6;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+textarea:focus,
+select:focus {
+  border-color: #858b95;
+  box-shadow: 0 0 0 4px rgba(0, 0, 0, 0.04);
+}
+
+.controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin-top: 24px;
+}
+
+select {
+  height: 48px;
+  padding: 0 14px;
+  outline: none;
+  background: #ffffff;
+  border: 1px solid #dfe1e5;
+  border-radius: 12px;
+}
+
+.startButton {
+  width: 100%;
+  height: 54px;
+  margin-top: 28px;
+  border: 0;
+  border-radius: 14px;
+  background: #17191c;
+  color: #ffffff;
+  font-weight: 650;
+  cursor: pointer;
+  transition:
+    transform 0.15s ease,
+    opacity 0.15s ease;
+}
+
+.startButton:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.startButton:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.progress {
+  margin-top: 32px;
+  padding: 20px;
+  background: #f7f8fa;
+  border-radius: 14px;
+}
+
+.progressHeader {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.progressTrack {
+  height: 8px;
+  overflow: hidden;
+  background: #e4e6e9;
+  border-radius: 100px;
+}
+
+.progressBar {
+  width: 0;
+  height: 100%;
+  background: #191b1e;
+  border-radius: inherit;
+}
+
+.progress p {
+  margin: 12px 0 0;
+  color: #858a92;
+  font-size: 13px;
+}
+
+@media (max-width: 700px) {
+  .app {
+    padding: 20px 12px;
+  }
+
+  .panel {
+    padding: 24px 18px;
+    border-radius: 18px;
+  }
+
+  .header {
+    flex-direction: column;
+  }
+
+  .controls {
+    grid-template-columns: 1fr;
+  }
+}
+
+.statusWarning {
+  background: #fff8e8;
+  color: #8a6300;
+}
+
+.statusWarning .statusDot {
+  background: #d99b00;
+}
+
+.statusError {
+  background: #fff0f0;
+  color: #a33131;
+}
+
+.statusError .statusDot {
+  background: #d74747;
+}
+
+.progressBar {
+  transition: width 0.35s ease;
+}
+
+.resultsPanel {
+  margin-top: 24px;
+  padding: 20px;
+  background: #f7f8fa;
+  border-radius: 14px;
+}
+
+.resultsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.resultsHeader span {
+  color: #858a92;
+  font-size: 13px;
+}
+
+.resultList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.resultItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 14px 16px;
+  background: #ffffff;
+  border: 1px solid #e6e8eb;
+  border-radius: 11px;
+}
+
+.resultItem > div {
+  min-width: 0;
+}
+
+.resultItem strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.resultItem span {
+  display: block;
+  margin-top: 5px;
+  color: #858a92;
+  font-size: 12px;
+}
+
+.resultItem a {
+  flex-shrink: 0;
+  color: #17191c;
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.resultItem a:hover {
+  text-decoration: underline;
+}
+
+.errorPanel {
+  margin-top: 20px;
+  padding: 18px;
+  background: #fff2f2;
+  border: 1px solid #f0d0d0;
+  border-radius: 14px;
+  color: #913535;
+  font-size: 13px;
+}
+
+.errorPanel p {
+  margin: 10px 0 0;
+}
+
+@media (max-width: 700px) {
+  .resultItem {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+.priceHint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 2px;
+  color: #858a92;
+  font-size: 12px;
+}
+
+.priceHint strong {
+  color: #555b63;
+  font-weight: 650;
+}
+
+.summaryPanel {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.summaryPanel > div {
+  padding: 16px;
+  background: #f7f8fa;
+  border: 1px solid #e7e9ec;
+  border-radius: 12px;
+}
+
+.summaryPanel strong {
+  display: block;
+  font-size: 22px;
+}
+
+.summaryPanel span {
+  display: block;
+  margin-top: 4px;
+  color: #858a92;
+  font-size: 12px;
+}
+
+.emptyPanel {
+  margin-top: 20px;
+  padding: 20px;
+  background: #fff9ed;
+  border: 1px solid #f0dfb7;
+  border-radius: 14px;
+}
+
+.emptyItem {
+  padding: 12px 0;
+  border-top: 1px solid
+    rgba(140, 105, 30, 0.12);
+}
+
+.emptyItem:first-of-type {
+  border-top: 0;
+}
+
+.emptyItem strong {
+  display: block;
+  color: #765611;
+  font-size: 14px;
+}
+
+.emptyItem span {
+  display: block;
+  margin-top: 5px;
+  color: #9a7a35;
+  font-size: 12px;
+}
+
+@media (max-width: 700px) {
+  .priceHint {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .summaryPanel {
+    grid-template-columns: 1fr;
+  }
+}
