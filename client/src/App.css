@@ -417,3 +417,68 @@ select {
     grid-template-columns: 1fr;
   }
 }
+
+.batchDownload {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-top: 24px;
+  padding: 22px;
+  background: #17191c;
+  border-radius: 16px;
+  color: #ffffff;
+}
+
+.batchDownload > div {
+  min-width: 0;
+}
+
+.batchLabel {
+  display: block;
+  margin-bottom: 6px;
+  color: #aeb4bd;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.12em;
+}
+
+.batchDownload strong {
+  display: block;
+  font-size: 18px;
+}
+
+.batchDownload p {
+  margin: 6px 0 0;
+  color: #aeb4bd;
+  font-size: 13px;
+}
+
+.batchDownload a {
+  flex-shrink: 0;
+  padding: 12px 18px;
+  background: #ffffff;
+  border-radius: 10px;
+  color: #17191c;
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+  transition:
+    transform 0.15s ease,
+    opacity 0.15s ease;
+}
+
+.batchDownload a:hover {
+  transform: translateY(-1px);
+}
+
+@media (max-width: 700px) {
+  .batchDownload {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .batchDownload a {
+    text-align: center;
+  }
+}

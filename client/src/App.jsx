@@ -46,14 +46,19 @@ function App() {
   const [currentQuery, setCurrentQuery] =
     useState("");
 
-  const [files, setFiles] =
-    useState([]);
+  const [
+    successfulResults,
+    setSuccessfulResults,
+  ] = useState([]);
 
   const [emptyResults, setEmptyResults] =
     useState([]);
 
   const [errors, setErrors] =
     useState([]);
+
+  const [batchFile, setBatchFile] =
+    useState(null);
 
   const queryList = useMemo(() => {
     const unique = new Set();
@@ -83,7 +88,8 @@ function App() {
       ? Math.min(
           100,
           Math.round(
-            (completed / queryCount) * 100
+            (completed / queryCount) *
+              100
           )
         )
       : 0;
@@ -102,15 +108,11 @@ function App() {
           )
         );
 
-        if (data.wordstatConfigured) {
-          setServerStatus(
-            "Wordstat API готов"
-          );
-        } else {
-          setServerStatus(
-            "Нужно настроить Wordstat API"
-          );
-        }
+        setServerStatus(
+          data.wordstatConfigured
+            ? "Wordstat API готов"
+            : "Нужно настроить Wordstat API"
+        );
       })
       .catch(() => {
         setServerOnline(false);
@@ -125,9 +127,10 @@ function App() {
   function resetCollectionState() {
     setCompleted(0);
     setCurrentQuery("");
-    setFiles([]);
+    setSuccessfulResults([]);
     setEmptyResults([]);
     setErrors([]);
+    setBatchFile(null);
   }
 
   function handleQueriesChange(event) {
@@ -157,84 +160,164 @@ function App() {
     setRunning(true);
     resetCollectionState();
 
-    for (
-      let index = 0;
-      index < queryList.length;
-      index += 1
-    ) {
-      const phrase =
-        queryList[index];
+    let batchId = null;
 
-      setCurrentQuery(phrase);
+    try {
+      const startResponse = await fetch(
+        `${API_URL}/api/wordstat/batch/start`,
+        {
+          method: "POST",
+        }
+      );
 
-      try {
-        const response = await fetch(
-          `${API_URL}/api/wordstat/export-one`,
+      const startData =
+        await startResponse.json();
+
+      if (!startResponse.ok) {
+        throw new Error(
+          startData.error ||
+            "Не удалось начать выгрузку"
+        );
+      }
+
+      batchId = startData.batchId;
+
+      for (
+        let index = 0;
+        index < queryList.length;
+        index += 1
+      ) {
+        const phrase =
+          queryList[index];
+
+        setCurrentQuery(phrase);
+
+        try {
+          const response = await fetch(
+            `${API_URL}/api/wordstat/batch/${batchId}/process`,
+            {
+              method: "POST",
+
+              headers: {
+                "Content-Type":
+                  "application/json",
+              },
+
+              body: JSON.stringify({
+                phrase,
+                regionId: "225",
+                regionName: "Россия",
+              }),
+            }
+          );
+
+          const data =
+            await response.json();
+
+          if (!response.ok) {
+            throw new Error(
+              data.error ||
+                `HTTP ${response.status}`
+            );
+          }
+
+          if (
+            data.status === "success"
+          ) {
+            setSuccessfulResults(
+              (previous) => [
+                ...previous,
+                data,
+              ]
+            );
+          } else if (
+            data.status === "empty"
+          ) {
+            setEmptyResults(
+              (previous) => [
+                ...previous,
+                data,
+              ]
+            );
+          } else if (
+            data.status === "error"
+          ) {
+            setErrors(
+              (previous) => [
+                ...previous,
+                {
+                  phrase,
+                  message:
+                    data.error ||
+                    "Ошибка Wordstat",
+                },
+              ]
+            );
+          }
+        } catch (error) {
+          setErrors(
+            (previous) => [
+              ...previous,
+              {
+                phrase,
+
+                message:
+                  error.message ||
+                  "Неизвестная ошибка",
+              },
+            ]
+          );
+        }
+
+        setCompleted(index + 1);
+
+        if (
+          index <
+          queryList.length - 1
+        ) {
+          await delay(500);
+        }
+      }
+
+      setCurrentQuery(
+        "Формируем общий Excel..."
+      );
+
+      const finishResponse =
+        await fetch(
+          `${API_URL}/api/wordstat/batch/${batchId}/finish`,
           {
             method: "POST",
-
-            headers: {
-              "Content-Type":
-                "application/json",
-            },
-
-            body: JSON.stringify({
-              phrase,
-              regionId: "225",
-              regionName: "Россия",
-            }),
           }
         );
 
-        const data =
-          await response.json();
+      const finishData =
+        await finishResponse.json();
 
-        if (!response.ok) {
-          throw new Error(
-            data.error ||
-              `HTTP ${response.status}`
-          );
-        }
-
-        if (
-          data.status === "empty"
-        ) {
-          setEmptyResults(
-            (previous) => [
-              ...previous,
-              data,
-            ]
-          );
-        } else {
-          setFiles((previous) => [
-            ...previous,
-            data,
-          ]);
-        }
-      } catch (error) {
-        setErrors((previous) => [
-          ...previous,
-          {
-            phrase,
-            message:
-              error.message ||
-              "Неизвестная ошибка",
-          },
-        ]);
+      if (!finishResponse.ok) {
+        throw new Error(
+          finishData.error ||
+            "Не удалось создать XLSX"
+        );
       }
 
-      setCompleted(index + 1);
+      setBatchFile(finishData);
+    } catch (error) {
+      setErrors((previous) => [
+        ...previous,
+        {
+          phrase:
+            "Системная ошибка",
 
-      if (
-        index <
-        queryList.length - 1
-      ) {
-        await delay(500);
-      }
+          message:
+            error.message ||
+            "Неизвестная ошибка",
+        },
+      ]);
+    } finally {
+      setCurrentQuery("");
+      setRunning(false);
     }
-
-    setCurrentQuery("");
-    setRunning(false);
   }
 
   return (
@@ -286,7 +369,9 @@ function App() {
             id="queries"
             value={queries}
             disabled={running}
-            onChange={handleQueriesChange}
+            onChange={
+              handleQueriesChange
+            }
             placeholder={`паспорт безопасности
 категорирование объекта
 электроизмерения
@@ -333,11 +418,10 @@ function App() {
 
             <select
               id="exportType"
-              disabled={running}
+              disabled
             >
-              <option value="separate">
-                Отдельный XLSX для
-                каждой фразы
+              <option>
+                Один XLSX на весь запуск
               </option>
             </select>
           </div>
@@ -393,8 +477,11 @@ function App() {
             <div className="summaryPanel">
               <div>
                 <strong>
-                  {files.length}
+                  {
+                    successfulResults.length
+                  }
                 </strong>
+
                 <span>
                   Найдено
                 </span>
@@ -406,6 +493,7 @@ function App() {
                     emptyResults.length
                   }
                 </strong>
+
                 <span>
                   Без результатов
                 </span>
@@ -415,6 +503,7 @@ function App() {
                 <strong>
                   {errors.length}
                 </strong>
+
                 <span>
                   Ошибок
                 </span>
@@ -422,49 +511,65 @@ function App() {
             </div>
           )}
 
-        {files.length > 0 && (
+        {batchFile && (
+          <div className="batchDownload">
+            <div>
+              <span className="batchLabel">
+                ГОТОВО
+              </span>
+
+              <strong>
+                Единый Excel-файл
+              </strong>
+
+              <p>
+                Все запросы этого запуска
+                собраны в одном XLSX
+              </p>
+            </div>
+
+            <a
+              href={`${API_URL}${batchFile.downloadUrl}`}
+            >
+              Скачать XLSX
+            </a>
+          </div>
+        )}
+
+        {successfulResults.length >
+          0 && (
           <div className="resultsPanel">
             <div className="resultsHeader">
               <strong>
-                Готовые файлы
+               Проверенная семантика
               </strong>
 
               <span>
-                {files.length}
+                {
+                  successfulResults.length
+                }
               </span>
             </div>
 
             <div className="resultList">
-              {files.map(
-                (file) => (
+              {successfulResults.map(
+                (item) => (
                   <div
                     className="resultItem"
-                    key={
-                      file.fileName
-                    }
+                    key={item.phrase}
                   >
                     <div>
                       <strong>
-                        ✓ {file.phrase}
+                        ✓ {item.phrase}
                       </strong>
 
                       <span>
-                        {
-                          file.resultsCount
-                        }{" "}
-                        запросов ·{" "}
-                        {
-                          file.associationsCount
-                        }{" "}
-                        похожих
+                        Частотность:{" "}
+                        {Number(
+                          item.totalCount || 0
+                        ).toLocaleString("ru-RU")}
                       </span>
                     </div>
-
-                    <a
-                      href={`${API_URL}${file.downloadUrl}`}
-                    >
-                      Скачать XLSX
-                    </a>
                   </div>
                 )
               )}
@@ -514,11 +619,9 @@ function App() {
             </strong>
 
             {errors.map(
-              (item) => (
+              (item, index) => (
                 <p
-                  key={
-                    item.phrase
-                  }
+                  key={`${item.phrase}-${index}`}
                 >
                   <b>
                     {item.phrase}

@@ -6,6 +6,7 @@ import ExcelJS from "exceljs";
 import path from "node:path";
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
@@ -17,6 +18,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const EXPORTS_DIR = path.join(__dirname, "exports");
+const batches = new Map();
 
 await mkdir(EXPORTS_DIR, {
   recursive: true,
@@ -59,7 +61,7 @@ async function requestWordstatTop({
 
   const body = {
     phrase,
-    numPhrases: 2000,
+    numPhrases: 1,
     regions: [String(regionId)],
     devices: ["DEVICE_ALL"],
     folderId: process.env.YANDEX_FOLDER_ID,
@@ -274,6 +276,86 @@ async function createExcelFile({
   };
 }
 
+function styleHeader(row) {
+  row.font = {
+    bold: true,
+  };
+
+  row.height = 24;
+}
+
+function createBatchWorkbook() {
+  const workbook = new ExcelJS.Workbook();
+
+  workbook.creator = "Wordstat Exporter";
+  workbook.created = new Date();
+
+  const semanticSheet =
+    workbook.addWorksheet("Семантика");
+
+  const headerRow = semanticSheet.addRow([
+    "№",
+    "Запрос",
+    "Частотность",
+    "Статус",
+  ]);
+
+  styleHeader(headerRow);
+
+  semanticSheet.columns = [
+    { width: 8 },
+    { width: 70 },
+    { width: 22 },
+    { width: 22 },
+  ];
+
+  semanticSheet.views = [
+    {
+      state: "frozen",
+      ySplit: 1,
+    },
+  ];
+
+  semanticSheet.autoFilter = {
+    from: "A1",
+    to: "D1",
+  };
+
+  semanticSheet.getColumn(3).numFmt =
+    "#,##0";
+
+  return {
+    workbook,
+    semanticSheet,
+  };
+}
+
+function createBatchFileName() {
+  const timestamp = new Date()
+    .toISOString()
+    .replace("T", "_")
+    .replace(/\.\d{3}Z$/, "")
+    .replace(/:/g, "-");
+
+  return `wordstat-export-${timestamp}.xlsx`;
+}
+
+function cleanupOldBatches() {
+  const now = Date.now();
+
+  const maxAge =
+    2 * 60 * 60 * 1000;
+
+  for (const [batchId, batch] of batches) {
+    if (
+      now - batch.createdAt >
+      maxAge
+    ) {
+      batches.delete(batchId);
+    }
+  }
+}
+
 app.get("/api/health", (req, res) => {
   res.json({
     ok: true,
@@ -283,6 +365,229 @@ app.get("/api/health", (req, res) => {
     time: new Date().toISOString(),
   });
 });
+
+app.post(
+  "/api/wordstat/batch/start",
+  (req, res) => {
+    cleanupOldBatches();
+
+    if (!isWordstatConfigured()) {
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Wordstat API не настроен",
+      });
+    }
+
+    const batchId = randomUUID();
+
+    const workbookData =
+      createBatchWorkbook();
+
+    batches.set(batchId, {
+      ...workbookData,
+
+      createdAt: Date.now(),
+
+      processed: 0,
+      successCount: 0,
+      emptyCount: 0,
+      errorCount: 0,
+    });
+
+    return res.json({
+      ok: true,
+      batchId,
+    });
+  }
+);
+
+app.post(
+  "/api/wordstat/batch/:batchId/process",
+  async (req, res) => {
+    const batch = batches.get(
+      req.params.batchId
+    );
+
+    if (!batch) {
+      return res.status(404).json({
+        ok: false,
+        error:
+          "Пакет выгрузки не найден или устарел",
+      });
+    }
+
+    const phrase = String(
+      req.body.phrase || ""
+    ).trim();
+
+    const regionId = String(
+      req.body.regionId || "225"
+    );
+
+    if (!phrase) {
+      return res.status(400).json({
+        ok: false,
+        error:
+          "Не передан поисковый запрос",
+      });
+    }
+
+    const rowNumber =
+      batch.processed + 1;
+
+    try {
+      console.log(
+        `Wordstat batch: "${phrase}"`
+      );
+
+      const data =
+        await requestWordstatTop({
+          phrase,
+          regionId,
+        });
+
+      const totalCount = Number(
+        data.totalCount || 0
+      );
+
+      if (totalCount === 0) {
+        batch.semanticSheet.addRow([
+          rowNumber,
+          phrase,
+          0,
+          "Нет данных",
+        ]);
+
+        batch.processed += 1;
+        batch.emptyCount += 1;
+
+        return res.json({
+          ok: true,
+          status: "empty",
+          phrase,
+          totalCount: 0,
+        });
+      }
+
+      batch.semanticSheet.addRow([
+        rowNumber,
+        phrase,
+        totalCount,
+        "Готово",
+      ]);
+
+      batch.processed += 1;
+      batch.successCount += 1;
+
+      return res.json({
+        ok: true,
+        status: "success",
+        phrase,
+        totalCount,
+      });
+    } catch (error) {
+      console.error(
+        `Wordstat batch error "${phrase}":`,
+        error
+      );
+
+      batch.semanticSheet.addRow([
+        rowNumber,
+        phrase,
+        "",
+        "Ошибка",
+      ]);
+
+      batch.processed += 1;
+      batch.errorCount += 1;
+
+      return res.json({
+        ok: true,
+        status: "error",
+        phrase,
+
+        error:
+          error.message ||
+          "Неизвестная ошибка",
+      });
+    }
+  }
+);
+
+app.post(
+  "/api/wordstat/batch/:batchId/finish",
+  async (req, res) => {
+    const batch = batches.get(
+      req.params.batchId
+    );
+
+    if (!batch) {
+      return res.status(404).json({
+        ok: false,
+        error:
+          "Пакет выгрузки не найден или устарел",
+      });
+    }
+
+    try {
+      const fileName =
+        createBatchFileName();
+
+      const filePath = path.join(
+        EXPORTS_DIR,
+        fileName
+      );
+
+      await batch.workbook.xlsx.writeFile(
+        filePath
+      );
+
+      const result = {
+        ok: true,
+
+        fileName,
+
+        downloadUrl:
+          `/api/files/${encodeURIComponent(
+            fileName
+          )}`,
+
+        processed:
+          batch.processed,
+
+        successCount:
+          batch.successCount,
+
+        emptyCount:
+          batch.emptyCount,
+
+        errorCount:
+          batch.errorCount,
+      };
+
+      batches.delete(
+        req.params.batchId
+      );
+
+      console.log(
+        `Wordstat batch готов: ${fileName}`
+      );
+
+      return res.json(result);
+    } catch (error) {
+      console.error(error);
+
+      return res.status(500).json({
+        ok: false,
+
+        error:
+          error.message ||
+          "Не удалось создать общий XLSX",
+      });
+    }
+  }
+);
 
 app.post(
   "/api/wordstat/export-one",
