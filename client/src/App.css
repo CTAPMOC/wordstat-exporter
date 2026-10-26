@@ -1,4 +1,4 @@
-﻿* {
+* {
   box-sizing: border-box;
 }
 
@@ -482,3 +482,16 @@ select {
     text-align: center;
   }
 }
+.loginPanel { max-width: 580px; margin-top: 6vh; }
+.loginPanel h1 { font-size: clamp(28px, 5vw, 40px); }
+.loginPanel form { margin-top: 32px; }
+input { font: inherit; height: 48px; padding: 0 14px; border: 1px solid #dfe1e5; border-radius: 12px; width: 100%; }
+input:focus-visible, button:focus-visible, a:focus-visible { outline: 3px solid #517baa; outline-offset: 3px; }
+.secondaryButton { padding: 10px 18px; background: white; border: 1px solid #dfe1e5; border-radius: 10px; cursor: pointer; }
+.queryForm { margin-top: 28px; }
+.hint { margin: 4px 0; color: #696e76; font-size: 13px; line-height: 1.6; }
+.resultList { max-height: 420px; overflow-y: auto; }
+.resultError { border-color: #f0d0d0; background: #fff2f2; }
+.historyItem { display: flex; justify-content: space-between; gap: 12px; padding: 14px; border: 1px solid #e6e8eb; border-radius: 10px; background: white; text-align: left; cursor: pointer; font-size: 13px; }
+.historyItem:disabled { opacity: .5; cursor: default; }
+@media (max-width: 700px) { .historyItem { flex-direction: column; } }

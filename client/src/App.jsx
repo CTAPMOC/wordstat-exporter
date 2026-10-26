@@ -1,640 +1,178 @@
-﻿import {
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
-
+import { useEffect, useMemo, useState } from "react";
 import "./App.css";
 
-const API_URL =
-  "http://127.0.0.1:8788";
+const number = value => Number(value || 0).toLocaleString("ru-RU");
 
-const REQUEST_PRICE_RUB = 0.02;
-
-const delay = (ms) =>
-  new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-
-function formatPrice(value) {
-  return value
-    .toFixed(2)
-    .replace(".", ",");
+async function requestJSON(url, options = {}) {
+  const response = await fetch(url, { credentials: "same-origin", ...options, headers: { "Content-Type": "application/json", ...options.headers } });
+  const data = await response.json();
+  if (!response.ok) {
+    const error = new Error(data.error || "Не удалось выполнить запрос");
+    error.status = response.status;
+    throw error;
+  }
+  return data;
 }
 
-function App() {
-  const [queries, setQueries] =
-    useState("");
+export default function App() {
+  const [auth, setAuth] = useState(null);
+  const [password, setPassword] = useState("");
+  const [message, setMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [configured, setConfigured] = useState(false);
+  const [queries, setQueries] = useState("");
+  const [regionId, setRegionId] = useState("all");
+  const [batch, setBatch] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [connectionError, setConnectionError] = useState("");
+  const queryList = useMemo(() => [...new Set(queries.split("\n").map(value => value.trim()).filter(Boolean))], [queries]);
+  const running = batch && ["running", "exporting"].includes(batch.status);
+  const progress = batch?.total ? Math.round(batch.processed / batch.total * 100) : 0;
+  const invalidQueries = queryList.length > 2000 || queryList.some(value => value.length > 400);
 
-  const [serverOnline, setServerOnline] =
-    useState(false);
+  async function api(url, options = {}) {
+    try { return await requestJSON(url, options); }
+    catch (error) {
+      if (error.status === 401 && url !== "/api/auth/login") setAuth({ authenticated: false, configured: true });
+      throw error;
+    }
+  }
 
-  const [
-    wordstatConfigured,
-    setWordstatConfigured,
-  ] = useState(false);
-
-  const [serverStatus, setServerStatus] =
-    useState("Проверяем...");
-
-  const [running, setRunning] =
-    useState(false);
-
-  const [completed, setCompleted] =
-    useState(0);
-
-  const [currentQuery, setCurrentQuery] =
-    useState("");
-
-  const [
-    successfulResults,
-    setSuccessfulResults,
-  ] = useState([]);
-
-  const [emptyResults, setEmptyResults] =
-    useState([]);
-
-  const [errors, setErrors] =
-    useState([]);
-
-  const [batchFile, setBatchFile] =
-    useState(null);
-
-  const queryList = useMemo(() => {
-    const unique = new Set();
-
-    return queries
-      .split("\n")
-      .map((query) => query.trim())
-      .filter(Boolean)
-      .filter((query) => {
-        if (unique.has(query)) {
-          return false;
-        }
-
-        unique.add(query);
-
-        return true;
-      });
-  }, [queries]);
-
-  const queryCount = queryList.length;
-
-  const estimatedPrice =
-    queryCount * REQUEST_PRICE_RUB;
-
-  const progress =
-    queryCount > 0
-      ? Math.min(
-          100,
-          Math.round(
-            (completed / queryCount) *
-              100
-          )
-        )
-      : 0;
+  async function checkSession() {
+    try { setAuth(await api("/api/auth/session")); setMessage(""); }
+    catch { setMessage("Сервер недоступен. Проверьте, что он запущен."); }
+  }
 
   useEffect(() => {
-    fetch(`${API_URL}/api/health`)
-      .then((response) =>
-        response.json()
-      )
-      .then((data) => {
-        setServerOnline(true);
-
-        setWordstatConfigured(
-          Boolean(
-            data.wordstatConfigured
-          )
-        );
-
-        setServerStatus(
-          data.wordstatConfigured
-            ? "Wordstat API готов"
-            : "Нужно настроить Wordstat API"
-        );
-      })
-      .catch(() => {
-        setServerOnline(false);
-        setWordstatConfigured(false);
-
-        setServerStatus(
-          "Сервер недоступен"
-        );
-      });
+    let cancelled = false;
+    requestJSON("/api/auth/session").then(data => { if (!cancelled) setAuth(data); })
+      .catch(() => { if (!cancelled) setMessage("Сервер недоступен. Проверьте, что он запущен."); });
+    return () => { cancelled = true; };
   }, []);
 
-  function resetCollectionState() {
-    setCompleted(0);
-    setCurrentQuery("");
-    setSuccessfulResults([]);
-    setEmptyResults([]);
-    setErrors([]);
-    setBatchFile(null);
-  }
+  useEffect(() => {
+    if (!auth?.authenticated) return;
+    let cancelled = false;
+    Promise.all([requestJSON("/api/health"), requestJSON("/api/wordstat/batches")]).then(([health, data]) => {
+      if (cancelled) return;
+      setConfigured(health.wordstatConfigured);
+      setHistory(data.batches);
+      setBatch(data.batches.find(item => ["running", "exporting", "paused"].includes(item.status)) || data.batches[0] || null);
+      setConnectionError("");
+    }).catch(error => {
+      if (cancelled) return;
+      if (error.status === 401) setAuth({ authenticated: false, configured: true });
+      setConnectionError(error.message);
+    });
+    return () => { cancelled = true; };
+  }, [auth?.authenticated]);
 
-  function handleQueriesChange(event) {
-    setQueries(event.target.value);
-
-    if (!running) {
-      resetCollectionState();
+  useEffect(() => {
+    if (!auth?.authenticated || !batch?.id || !running) return;
+    let cancelled = false;
+    let timer;
+    async function poll() {
+      try {
+        const data = await api(`/api/wordstat/batch/${batch.id}`);
+        if (cancelled) return;
+        setBatch(data);
+        setConnectionError("");
+        setHistory(previous => [data, ...previous.filter(item => item.id !== data.id)]);
+      } catch (error) { if (!cancelled) setConnectionError(`${error.message}. Сохранённый прогресс появится после восстановления связи.`); }
+      if (!cancelled) timer = setTimeout(poll, 1500);
     }
-  }
+    poll();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [auth?.authenticated, batch?.id, running]);
 
-  async function startCollection() {
-    if (
-      running ||
-      queryList.length === 0
-    ) {
-      return;
-    }
-
-    if (!wordstatConfigured) {
-      alert(
-        "Сначала необходимо настроить доступ к Wordstat API."
-      );
-
-      return;
-    }
-
-    setRunning(true);
-    resetCollectionState();
-
-    let batchId = null;
-
+  async function login(event) {
+    event.preventDefault();
+    setSubmitting(true);
+    setMessage("");
     try {
-      const startResponse = await fetch(
-        `${API_URL}/api/wordstat/batch/start`,
-        {
-          method: "POST",
-        }
-      );
-
-      const startData =
-        await startResponse.json();
-
-      if (!startResponse.ok) {
-        throw new Error(
-          startData.error ||
-            "Не удалось начать выгрузку"
-        );
-      }
-
-      batchId = startData.batchId;
-
-      for (
-        let index = 0;
-        index < queryList.length;
-        index += 1
-      ) {
-        const phrase =
-          queryList[index];
-
-        setCurrentQuery(phrase);
-
-        try {
-          const response = await fetch(
-            `${API_URL}/api/wordstat/batch/${batchId}/process`,
-            {
-              method: "POST",
-
-              headers: {
-                "Content-Type":
-                  "application/json",
-              },
-
-              body: JSON.stringify({
-                phrase,
-                regionId: "225",
-                regionName: "Россия",
-              }),
-            }
-          );
-
-          const data =
-            await response.json();
-
-          if (!response.ok) {
-            throw new Error(
-              data.error ||
-                `HTTP ${response.status}`
-            );
-          }
-
-          if (
-            data.status === "success"
-          ) {
-            setSuccessfulResults(
-              (previous) => [
-                ...previous,
-                data,
-              ]
-            );
-          } else if (
-            data.status === "empty"
-          ) {
-            setEmptyResults(
-              (previous) => [
-                ...previous,
-                data,
-              ]
-            );
-          } else if (
-            data.status === "error"
-          ) {
-            setErrors(
-              (previous) => [
-                ...previous,
-                {
-                  phrase,
-                  message:
-                    data.error ||
-                    "Ошибка Wordstat",
-                },
-              ]
-            );
-          }
-        } catch (error) {
-          setErrors(
-            (previous) => [
-              ...previous,
-              {
-                phrase,
-
-                message:
-                  error.message ||
-                  "Неизвестная ошибка",
-              },
-            ]
-          );
-        }
-
-        setCompleted(index + 1);
-
-        if (
-          index <
-          queryList.length - 1
-        ) {
-          await delay(500);
-        }
-      }
-
-      setCurrentQuery(
-        "Формируем общий Excel..."
-      );
-
-      const finishResponse =
-        await fetch(
-          `${API_URL}/api/wordstat/batch/${batchId}/finish`,
-          {
-            method: "POST",
-          }
-        );
-
-      const finishData =
-        await finishResponse.json();
-
-      if (!finishResponse.ok) {
-        throw new Error(
-          finishData.error ||
-            "Не удалось создать XLSX"
-        );
-      }
-
-      setBatchFile(finishData);
-    } catch (error) {
-      setErrors((previous) => [
-        ...previous,
-        {
-          phrase:
-            "Системная ошибка",
-
-          message:
-            error.message ||
-            "Неизвестная ошибка",
-        },
-      ]);
-    } finally {
-      setCurrentQuery("");
-      setRunning(false);
-    }
+      await api("/api/auth/login", { method: "POST", body: JSON.stringify({ password }) });
+      setPassword("");
+      setAuth({ authenticated: true, configured: true });
+    } catch (error) { setMessage(error.message); }
+    finally { setSubmitting(false); }
   }
+
+  async function logout() {
+    try {
+      await api("/api/auth/logout", { method: "POST" });
+      setAuth({ authenticated: false, configured: true });
+      setBatch(null); setHistory([]); setQueries(""); setMessage("");
+    } catch (error) { setMessage(error.message); }
+  }
+
+  async function start() {
+    setSubmitting(true); setMessage("");
+    try {
+      const data = await api("/api/wordstat/batch/start", { method: "POST", body: JSON.stringify({ queries: queryList, regionId }) });
+      setBatch(data); setHistory(previous => [data, ...previous]);
+    } catch (error) { setMessage(error.message); }
+    finally { setSubmitting(false); }
+  }
+
+  async function resume() {
+    setSubmitting(true); setMessage("");
+    try { setBatch(await api(`/api/wordstat/batch/${batch.id}/resume`, { method: "POST" })); }
+    catch (error) { setMessage(error.message); }
+    finally { setSubmitting(false); }
+  }
+
+  if (!auth?.authenticated) return (
+    <main className="app"><section className="panel loginPanel">
+      <p className="eyebrow">ДОСТУП ПО ПАРОЛЮ</p><h1>Wordstat Exporter</h1>
+      <p className="description">Войдите, чтобы собрать семантику и скачать Excel.</p>
+      {auth ? <form onSubmit={login}>
+        <div className="formGroup"><label htmlFor="password">Пароль</label>
+          <input id="password" type="password" autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} required maxLength={256} autoFocus />
+        </div>
+        {!auth.configured && <p className="errorPanel">Пароль ещё не настроен. В папке server выполните npm run password и перезапустите сервер.</p>}
+        <button className="startButton" disabled={submitting || !password || !auth.configured}>{submitting ? "Проверяем…" : "Войти"}</button>
+      </form> : <button className="startButton" onClick={checkSession}>Проверить подключение</button>}
+      {message && <p className="errorPanel" role="alert">{message}</p>}
+    </section></main>
+  );
 
   return (
-    <main className="app">
-      <section className="panel">
-        <div className="header">
-          <div>
-            <p className="eyebrow">
-              LOCAL TOOL
-            </p>
-
-            <h1>
-              Wordstat Exporter
-            </h1>
-
-            <p className="description">
-              Массовый сбор поисковых
-              запросов из Яндекс Wordstat
-            </p>
-          </div>
-
-          <div
-            className={`status ${
-              !serverOnline
-                ? "statusError"
-                : !wordstatConfigured
-                  ? "statusWarning"
-                  : ""
-            }`}
-          >
-            <span className="statusDot" />
-
-            {serverStatus}
-          </div>
+    <main className="app"><section className="panel">
+      <div className="header"><div><p className="eyebrow">СЕМАНТИКА WORDSTAT</p><h1>Wordstat Exporter</h1>
+        <p className="description">Популярные и похожие фразы — в одном Excel.</p></div>
+        <button className="secondaryButton" onClick={logout}>Выйти</button>
+      </div>
+      <div className={`status ${configured ? "" : "statusWarning"}`}><span className="statusDot" />{configured ? "Wordstat API готов" : "Нужно настроить Wordstat API в server/.env"}</div>
+      <div className="formGroup queryForm"><div className="labelRow"><label htmlFor="queries">Исходные запросы — по одному на строку</label><span>{queryList.length} шт.</span></div>
+        <textarea id="queries" value={queries} disabled={running || submitting} onChange={event => setQueries(event.target.value)} placeholder={'паспорт безопасности\nкатегорирование объекта\nэлектроизмерения\nиспытание кабеля'} />
+        <p className="hint">До 2 000 фраз в параметре запроса API. Сохраняем все возвращённые популярные и похожие фразы. Совпадения между исходными запросами сохраняются с указанием источника.</p>
+      </div>
+      <div className="controls"><div className="formGroup"><label htmlFor="region">Регион</label>
+        <select id="region" value={regionId} disabled={running || submitting} onChange={event => setRegionId(event.target.value)}><option value="all">Все регионы</option><option value="225">Россия</option><option value="213">Москва</option><option value="2">Санкт-Петербург</option></select>
+      </div><div className="formGroup"><label>Выгрузка</label><p className="hint">Один XLSX на весь запуск · последние 30 дней · все устройства</p></div></div>
+      {invalidQueries && <p className="errorPanel">Можно передать до 2 000 исходных запросов, не длиннее 400 символов каждый.</p>}
+      <button className="startButton" disabled={running || submitting || !configured || !queryList.length || invalidQueries} onClick={start}>{running ? "Идёт сбор…" : submitting ? "Создаём запуск…" : "Начать сбор"}</button>
+      {message && <p className="errorPanel" role="alert">{message}</p>}
+      {connectionError && <p className="errorPanel" role="alert">{connectionError}</p>}
+      {batch && <>
+        <div className="progress" aria-live="polite"><div className="progressHeader"><span>{batch.regionName} · {new Date(batch.createdAt).toLocaleString("ru-RU")}</span><span>{batch.processed} / {batch.total}</span></div>
+          <div className="progressTrack"><div className="progressBar" style={{ width: `${progress}%` }} /></div>
+          <p>{batch.status === "completed" ? "Сбор завершён" : batch.status === "paused" ? "Сбор приостановлен. Данные сохранены." : batch.currentQuery || "Начинаем сбор…"}</p>
+          {running && <p>Можно обновить или закрыть вкладку: сбор продолжится, пока работает сервер.</p>}
         </div>
-
-        <div className="formGroup">
-          <div className="labelRow">
-            <label htmlFor="queries">
-              Поисковые запросы
-            </label>
-
-            <span>
-              {queryCount} шт.
-            </span>
-          </div>
-
-          <textarea
-            id="queries"
-            value={queries}
-            disabled={running}
-            onChange={
-              handleQueriesChange
-            }
-            placeholder={`паспорт безопасности
-категорирование объекта
-электроизмерения
-испытание кабеля`}
-          />
-
-          <div className="priceHint">
-            <span>
-              1 запрос ≈ 0,02 ₽
-            </span>
-
-            {queryCount > 0 && (
-              <strong>
-                Текущий запуск ≈{" "}
-                {formatPrice(
-                  estimatedPrice
-                )}{" "}
-                ₽
-              </strong>
-            )}
-          </div>
-        </div>
-
-        <div className="controls">
-          <div className="formGroup">
-            <label htmlFor="region">
-              Регион
-            </label>
-
-            <select
-              id="region"
-              disabled={running}
-            >
-              <option value="225">
-                Россия
-              </option>
-            </select>
-          </div>
-
-          <div className="formGroup">
-            <label htmlFor="exportType">
-              Выгрузка
-            </label>
-
-            <select
-              id="exportType"
-              disabled
-            >
-              <option>
-                Один XLSX на весь запуск
-              </option>
-            </select>
-          </div>
-        </div>
-
-        <button
-          className="startButton"
-          disabled={
-            queryCount === 0 ||
-            running ||
-            !wordstatConfigured
-          }
-          type="button"
-          onClick={startCollection}
-        >
-          {running
-            ? "Идёт сбор..."
-            : "Начать сбор"}
-        </button>
-
-        <div className="progress">
-          <div className="progressHeader">
-            <span>
-              Прогресс
-            </span>
-
-            <span>
-              {completed} /{" "}
-              {queryCount}
-            </span>
-          </div>
-
-          <div className="progressTrack">
-            <div
-              className="progressBar"
-              style={{
-                width: `${progress}%`,
-              }}
-            />
-          </div>
-
-          <p>
-            {running
-              ? `Сейчас: ${currentQuery}`
-              : completed > 0
-                ? "Сбор завершён"
-                : "Ожидание запуска..."}
-          </p>
-        </div>
-
-        {completed > 0 &&
-          !running && (
-            <div className="summaryPanel">
-              <div>
-                <strong>
-                  {
-                    successfulResults.length
-                  }
-                </strong>
-
-                <span>
-                  Найдено
-                </span>
-              </div>
-
-              <div>
-                <strong>
-                  {
-                    emptyResults.length
-                  }
-                </strong>
-
-                <span>
-                  Без результатов
-                </span>
-              </div>
-
-              <div>
-                <strong>
-                  {errors.length}
-                </strong>
-
-                <span>
-                  Ошибок
-                </span>
-              </div>
-            </div>
-          )}
-
-        {batchFile && (
-          <div className="batchDownload">
-            <div>
-              <span className="batchLabel">
-                ГОТОВО
-              </span>
-
-              <strong>
-                Единый Excel-файл
-              </strong>
-
-              <p>
-                Все запросы этого запуска
-                собраны в одном XLSX
-              </p>
-            </div>
-
-            <a
-              href={`${API_URL}${batchFile.downloadUrl}`}
-            >
-              Скачать XLSX
-            </a>
-          </div>
-        )}
-
-        {successfulResults.length >
-          0 && (
-          <div className="resultsPanel">
-            <div className="resultsHeader">
-              <strong>
-               Проверенная семантика
-              </strong>
-
-              <span>
-                {
-                  successfulResults.length
-                }
-              </span>
-            </div>
-
-            <div className="resultList">
-              {successfulResults.map(
-                (item) => (
-                  <div
-                    className="resultItem"
-                    key={item.phrase}
-                  >
-                    <div>
-                      <strong>
-                        ✓ {item.phrase}
-                      </strong>
-
-                      <span>
-                        Частотность:{" "}
-                        {Number(
-                          item.totalCount || 0
-                        ).toLocaleString("ru-RU")}
-                      </span>
-                    </div>
-                  </div>
-                )
-              )}
-            </div>
-          </div>
-        )}
-
-        {emptyResults.length > 0 && (
-          <div className="emptyPanel">
-            <div className="resultsHeader">
-              <strong>
-                Ничего не найдено
-              </strong>
-
-              <span>
-                {
-                  emptyResults.length
-                }
-              </span>
-            </div>
-
-            {emptyResults.map(
-              (item) => (
-                <div
-                  className="emptyItem"
-                  key={item.phrase}
-                >
-                  <strong>
-                    — {item.phrase}
-                  </strong>
-
-                  <span>
-                    Wordstat не нашёл
-                    статистику по этой
-                    фразе
-                  </span>
-                </div>
-              )
-            )}
-          </div>
-        )}
-
-        {errors.length > 0 && (
-          <div className="errorPanel">
-            <strong>
-              Не удалось обработать:
-            </strong>
-
-            {errors.map(
-              (item, index) => (
-                <p
-                  key={`${item.phrase}-${index}`}
-                >
-                  <b>
-                    {item.phrase}
-                  </b>
-                  : {item.message}
-                </p>
-              )
-            )}
-          </div>
-        )}
-      </section>
-    </main>
+        <div className="summaryPanel"><div><strong>{number(batch.semanticCount)}</strong><span>Строк семантики</span></div><div><strong>{number(batch.uniqueCount)}</strong><span>Уникальных фраз</span></div><div><strong>{batch.items.filter(item => item.status === "error").length}</strong><span>Ошибок</span></div></div>
+        {batch.items.some(item => item.limitReached) && <p className="emptyPanel">Для части запросов достигнут лимит API. Полученная семантика сохранена; список по этим запросам может быть неполным.</p>}
+        {batch.error && <p className="errorPanel">{batch.error}</p>}
+        {batch.status === "paused" && <button className="startButton" disabled={submitting || !configured} onClick={resume}>Продолжить сохранённый сбор</button>}
+        {batch.downloadUrl && <div className="batchDownload"><div><span className="batchLabel">ГОТОВО</span><strong>Единый Excel-файл</strong><p>{batch.processed} исходных запросов · {number(batch.semanticCount)} строк семантики</p></div><a href={batch.downloadUrl}>Скачать XLSX</a></div>}
+        {batch.items.length > 0 && <div className="resultsPanel"><div className="resultsHeader"><strong>Обработанные запросы</strong><span>{batch.items.length}</span></div><div className="resultList">
+          {batch.items.map((item, index) => <div className={`resultItem ${item.status === "error" ? "resultError" : ""}`} key={`${index}-${item.phrase}`}><div><strong>{item.phrase}</strong>
+            <span>{item.status === "error" ? item.error : `Общая частотность: ${number(item.totalCount)} · популярных: ${number(item.resultsCount)} · похожих: ${number(item.associationsCount)}`}</span>
+            {item.fallback && <span>{item.status === "empty" ? "Нет статистики. Исходный запрос сохранён с частотностью 0." : "Нет списка популярных фраз. Сохранены исходный запрос и общая частотность."}</span>}
+          </div></div>)}
+        </div></div>}
+      </>}
+      {history.length > 0 && <div className="resultsPanel"><div className="resultsHeader"><strong>Последние запуски</strong></div><div className="resultList">{history.map(item => <button key={item.id} className="historyItem" disabled={running && item.id !== batch.id} onClick={() => setBatch(item)}><span>{new Date(item.createdAt).toLocaleString("ru-RU")} · {item.regionName}</span><span>{item.processed}/{item.total} запросов · {number(item.semanticCount)} строк · {{ running: "Сбор", exporting: "Создание Excel", completed: "Готово", paused: "Приостановлен" }[item.status]}</span></button>)}</div></div>}
+    </section></main>
   );
 }
-
-export default App;
