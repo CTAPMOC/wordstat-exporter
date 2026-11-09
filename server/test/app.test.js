@@ -8,7 +8,7 @@ import { createApp } from "../app.js";
 import { hashPassword, verifyPassword } from "../auth.js";
 import { createBatchStore } from "../batches.js";
 import { createExcel, countValue } from "../export.js";
-import { requestWordstatTop } from "../wordstat.js";
+import { requestWordstatTop, WordstatRateLimitError } from "../wordstat.js";
 
 const password = "test-only-password-not-for-real-use";
 const passwordHash = await hashPassword(password);
@@ -164,7 +164,7 @@ test("large batch: 120 seeds, 240240 semantic rows, exact export counts, sheet r
   assert.equal(countValue("9223372036854775807"), "9223372036854775807");
 });
 
-test("Wordstat request uses maximum phrases, all-region filter, timeout, and backs off on throttling", async t => {
+test("Wordstat request uses maximum phrases, all-region filter, timeout, and preserves quota retry time", async t => {
   const previous = { key: process.env.YANDEX_API_KEY, folder: process.env.YANDEX_FOLDER_ID };
   process.env.YANDEX_API_KEY = "fixture-secret"; process.env.YANDEX_FOLDER_ID = "fixture-folder";
   t.after(() => {
@@ -177,8 +177,13 @@ test("Wordstat request uses maximum phrases, all-region filter, timeout, and bac
     const body = JSON.parse(options.body);
     assert.equal(body.numPhrases, 2000); assert.deepEqual(body.regions, []); assert.ok(options.signal);
     calls++;
-    return calls === 1 ? new Response('{}', { status: 429 }) : Response.json({ totalCount: "1", results: [] });
+    return calls === 1 ? new Response('{}', { status: 503 }) : Response.json({ totalCount: "1", results: [] });
   } });
   assert.equal(data.totalCount, "1"); assert.deepEqual(waits, [2000]);
+  const time = Date.now();
+  await assert.rejects(requestWordstatTop({ phrase: "quota" }, {
+    now: () => time,
+    fetchImpl: async () => new Response("not JSON", { status: 429, headers: { "retry-after": "3600" } }),
+  }), error => error instanceof WordstatRateLimitError && error.retryAt === time + 3600000);
   await assert.rejects(requestWordstatTop({ phrase: "bad" }, { fetchImpl: async () => new Response('{"message":"fixture-secret"}', { status: 403 }) }), error => !error.message.includes("fixture-secret"));
 });

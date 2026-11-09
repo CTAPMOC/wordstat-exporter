@@ -9,7 +9,7 @@ const regions = { all: "Все регионы", "225": "Россия", "213": "�
 export async function createApp(options) {
   const app = express();
   app.disable("x-powered-by");
-  app.use(express.json({ limit: "2mb" }));
+  app.use(express.json({ limit: "2mb", inflate: false }));
   installAuth(app, options);
   const store = await createBatchStore({ ...options, requestWordstat: options.requestWordstat || requestWordstatTop });
   app.locals.store = store;
@@ -57,7 +57,8 @@ export async function createApp(options) {
   if (options.clientDir) app.use(express.static(options.clientDir));
   app.use((error, req, res, next) => {
     if (res.headersSent) return next(error);
-    res.status(error.status === 400 || error.status === 413 ? error.status : 500).json({ error: "Не удалось выполнить запрос. Проверьте данные и доступность диска." });
+    const status = [400, 413, 415].includes(error.status) ? error.status : 500;
+    res.status(status).json({ error: "Не удалось выполнить запрос. Проверьте данные и доступность диска." });
   });
   return app;
 }

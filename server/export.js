@@ -1,6 +1,8 @@
 import ExcelJS from "exceljs";
 import path from "node:path";
-import { readFile, rename } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { readFile, rename, rm } from "node:fs/promises";
+import { finished } from "node:stream/promises";
 import { PHRASE_LIMIT } from "./wordstat.js";
 
 export function countValue(value) {
@@ -63,10 +65,7 @@ function table(workbook, name, headers, widths, rowLimit) {
   };
 }
 
-export async function createExcel(batch, directory, { rowLimit = 1048576 } = {}) {
-  const fileName = `wordstat-${batch.id}.xlsx`;
-  const temporary = path.join(directory, `${fileName}.tmp`);
-  const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({ filename: temporary, useStyles: true, useSharedStrings: false });
+async function populateWorkbook(workbook, batch, directory, rowLimit, checkOutput) {
   workbook.creator = "Wordstat Exporter";
   workbook.created = new Date();
   const source = table(workbook, "Исходные запросы", ["№", "Исходный запрос", "Общая частотность", "Статус", "Популярные", "Похожие", "Строк семантики", "Достигнут лимит API", "Регион", "Собрано (UTC)", "Комментарий"], [8, 60, 23, 20, 15, 15, 20, 25, 22, 27, 70], rowLimit);
@@ -74,6 +73,7 @@ export async function createExcel(batch, directory, { rowLimit = 1048576 } = {})
   let number = 0;
   for (let index = 0; index < batch.items.length; index += 1) {
     const record = JSON.parse(await readFile(path.join(directory, `${index}.json`), "utf8"));
+    checkOutput();
     const item = batch.items[index];
     source([index + 1, item.phrase, item.totalCount, { success: "Готово", empty: "Нет данных", error: "Ошибка" }[item.status], item.resultsCount, item.associationsCount, item.semanticCount, item.limitReached ? "Да" : "Нет", batch.regionName, item.collectedAt, item.error || (item.fallback ? "Сохранены исходная фраза и общая частотность" : "")]);
     for (const row of semanticRows(record)) {
@@ -96,7 +96,52 @@ export async function createExcel(batch, directory, { rowLimit = 1048576 } = {})
     ["Исходные данные", "Полные ответы API сохранены рядом с Excel в отдельных JSON-файлах по каждому запросу."],
   ]) info.addRow(row).commit();
   info.commit();
+  checkOutput();
   await workbook.commit();
-  await rename(temporary, path.join(directory, fileName));
-  return fileName;
+}
+
+export async function createExcel(batch, directory, {
+  rowLimit = 1048576,
+  createOutput = createWriteStream,
+} = {}) {
+  const fileName = `wordstat-${batch.id}.xlsx`;
+  const temporary = path.join(directory, `${fileName}.tmp`);
+  const output = createOutput(temporary);
+  let workbook;
+  let outputError;
+  let rejectOutput;
+  const outputFailure = new Promise((resolve, reject) => {
+    rejectOutput = reject;
+  });
+  function fail(error) {
+    outputError ||= error;
+    rejectOutput(outputError);
+  }
+  // Listen before ExcelJS starts writing, including before its commit() call.
+  output.on("error", fail);
+  const outputDone = finished(output, { cleanup: true });
+  outputDone.catch(fail);
+  outputFailure.catch(() => {});
+
+  try {
+    workbook = new ExcelJS.stream.xlsx.WorkbookWriter({
+      stream: output,
+      useStyles: true,
+      useSharedStrings: false,
+    });
+    workbook.zip.on("error", fail);
+    const writing = populateWorkbook(workbook, batch, directory, rowLimit, () => {
+      if (outputError) throw outputError;
+    });
+    await Promise.race([writing, outputFailure]);
+    await outputDone;
+    await rename(temporary, path.join(directory, fileName));
+    return fileName;
+  } catch (error) {
+    workbook?.zip.abort();
+    output.destroy();
+    if (!output.closed) await new Promise(resolve => output.once("close", resolve));
+    await rm(temporary, { force: true }).catch(() => {});
+    throw error;
+  }
 }
