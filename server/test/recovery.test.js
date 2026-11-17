@@ -115,7 +115,7 @@ test("120 seeds survive the hourly quota and resume the same phrase without erro
   assert.equal(done.retryAt, null);
 });
 
-test("quota Retry-After accepts dates and defaults to one hour when absent", async t => {
+test("quota Retry-After accepts dates and uses a one-minute probe when absent", async t => {
   const oldKey = process.env.YANDEX_API_KEY;
   const oldFolder = process.env.YANDEX_FOLDER_ID;
   process.env.YANDEX_API_KEY = "regression-fixture";
@@ -132,7 +132,7 @@ test("quota Retry-After accepts dates and defaults to one hour when absent", asy
     await assert.rejects(requestWordstatTop({ phrase: "seed" }, {
       now: () => time,
       fetchImpl: async () => new Response("quota", { status: 429, headers }),
-    }), error => error instanceof WordstatRateLimitError && error.retryAt === time + 3600000);
+    }), error => error instanceof WordstatRateLimitError && error.retryAt === time + (header ? 3600000 : 60000));
   }
 });
 

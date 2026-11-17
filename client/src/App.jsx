@@ -26,7 +26,7 @@ export default function App() {
   const [history, setHistory] = useState([]);
   const [connectionError, setConnectionError] = useState("");
   const queryList = useMemo(() => [...new Set(queries.split("\n").map(value => value.trim()).filter(Boolean))], [queries]);
-  const running = batch && ["running", "exporting", "waiting"].includes(batch.status);
+  const running = batch && ["running", "exporting", "waiting", "stopping"].includes(batch.status);
   const progress = batch?.total ? Math.round(batch.processed / batch.total * 100) : 0;
   const invalidQueries = queryList.length > 2000 || queryList.some(value => value.length > 400);
 
@@ -57,7 +57,7 @@ export default function App() {
       if (cancelled) return;
       setConfigured(health.wordstatConfigured);
       setHistory(data.batches);
-      const activeBatch = data.batches.find(item => ["running", "exporting", "waiting"].includes(item.status));
+      const activeBatch = data.batches.find(item => ["running", "exporting", "waiting", "stopping"].includes(item.status));
       const pausedBatch = data.batches.find(item => item.status === "paused");
       setBatch(activeBatch || pausedBatch || data.batches[0] || null);
       setConnectionError("");
@@ -122,6 +122,15 @@ export default function App() {
     catch (error) { setMessage(error.message); }
     finally { setSubmitting(false); }
   }
+  async function stop() {
+    setSubmitting(true); setMessage("");
+    try {
+      const data = await api(`/api/wordstat/batch/${batch.id}/stop`, { method: "POST" });
+      setBatch(data);
+      setHistory(previous => [data, ...previous.filter(item => item.id !== data.id)]);
+    } catch (error) { setMessage(error.message); }
+    finally { setSubmitting(false); }
+  }
 
   if (!auth?.authenticated) return (
     <main className="app"><section className="panel loginPanel">
@@ -159,15 +168,16 @@ export default function App() {
       {batch && <>
         <div className="progress" aria-live="polite"><div className="progressHeader"><span>{batch.regionName} · {new Date(batch.createdAt).toLocaleString("ru-RU")}</span><span>{batch.processed} / {batch.total}</span></div>
           <div className="progressTrack"><div className="progressBar" style={{ width: `${progress}%` }} /></div>
-          <p>{batch.status === "completed" ? "Сбор завершён" : batch.status === "paused" ? "Сбор приостановлен. Данные сохранены." : batch.currentQuery || "Начинаем сбор…"}</p>
+          <p>{batch.status === "completed" ? "Сбор завершён" : batch.status === "stopped" ? "Сбор остановлен. Собранные данные сохранены и доступны для скачивания." : batch.status === "stopping" ? "Останавливаем сбор…" : batch.status === "paused" ? "Сбор приостановлен. Данные сохранены." : batch.currentQuery || "Начинаем сбор…"}</p>
           {batch.status === "waiting" && <p>Ожидаем освобождения квоты Wordstat. Следующая попытка {new Date(batch.retryAt).toLocaleString("ru-RU")}. Сбор продолжится автоматически.</p>}
           {running && <p>Можно обновить или закрыть вкладку: сбор продолжится, пока работает сервер.</p>}
         </div>
         <div className="summaryPanel"><div><strong>{number(batch.semanticCount)}</strong><span>Строк семантики</span></div><div><strong>{number(batch.uniqueCount)}</strong><span>Уникальных фраз</span></div><div><strong>{batch.items.filter(item => item.status === "error").length}</strong><span>Ошибок</span></div></div>
         {batch.items.some(item => item.limitReached) && <p className="emptyPanel">Для части запросов достигнут лимит API. Полученная семантика сохранена; список по этим запросам может быть неполным.</p>}
         {batch.error && <p className="errorPanel">{batch.error}</p>}
-        {batch.status === "paused" && <button className="startButton" disabled={submitting || !configured} onClick={resume}>Продолжить сохранённый сбор</button>}
-        {batch.downloadUrl && <div className="batchDownload"><div><span className="batchLabel">ГОТОВО</span><strong>Единый Excel-файл</strong><p>{batch.processed} исходных запросов · {number(batch.semanticCount)} строк семантики</p></div><a href={batch.downloadUrl}>Скачать XLSX</a></div>}
+        {running && <button className="secondaryButton" disabled={submitting || batch.status === "stopping"} onClick={stop}>{submitting || batch.status === "stopping" ? "Останавливаем…" : "Остановить сбор"}</button>}
+        {["paused", "stopped"].includes(batch.status) && <button className="secondaryButton" disabled={submitting || !configured} onClick={resume}>Продолжить сохранённый сбор</button>}
+        {batch.items.length > 0 && <div className="batchDownload"><div><span className="batchLabel">{batch.status === "completed" ? "ГОТОВО" : "УЖЕ СОБРАНО"}</span><strong>{batch.status === "completed" ? "Единый Excel-файл" : "Скачать текущий результат"}</strong><p>{batch.processed} из {batch.total} исходных запросов · {number(batch.semanticCount)} строк семантики</p>{batch.status !== "completed" && <p>Скачивание доступно во время сбора и ожидания квоты. В файл попадут обработанные фразы на момент нажатия.</p>}</div><a href={`/api/wordstat/batch/${batch.id}/download`}>{batch.status === "completed" ? "Скачать XLSX" : "Скачать собранное XLSX"}</a></div>}
         {batch.items.length > 0 && <div className="resultsPanel"><div className="resultsHeader"><strong>Обработанные запросы</strong><span>{batch.items.length}</span></div><div className="resultList">
           {batch.items.map((item, index) => <div className={`resultItem ${item.status === "error" ? "resultError" : ""}`} key={`${index}-${item.phrase}`}><div><strong>{item.phrase}</strong>
             <span>{item.status === "error" ? item.error : `Общая частотность: ${number(item.totalCount)} · популярных: ${number(item.resultsCount)} · похожих: ${number(item.associationsCount)}`}</span>
@@ -175,7 +185,7 @@ export default function App() {
           </div></div>)}
         </div></div>}
       </>}
-      {history.length > 0 && <div className="resultsPanel"><div className="resultsHeader"><strong>Последние запуски</strong></div><div className="resultList">{history.map(item => <button key={item.id} className="historyItem" disabled={running && item.id !== batch.id} onClick={() => setBatch(item)}><span>{new Date(item.createdAt).toLocaleString("ru-RU")} · {item.regionName}</span><span>{item.processed}/{item.total} запросов · {number(item.semanticCount)} строк · {{ running: "Сбор", exporting: "Создание Excel", waiting: "Ожидание квоты", completed: "Готово", paused: "Приостановлен" }[item.status]}</span></button>)}</div></div>}
+      {history.length > 0 && <div className="resultsPanel"><div className="resultsHeader"><strong>Последние запуски</strong></div><div className="resultList">{history.map(item => <button key={item.id} className="historyItem" disabled={running && item.id !== batch.id} onClick={() => setBatch(item)}><span>{new Date(item.createdAt).toLocaleString("ru-RU")} · {item.regionName}</span><span>{item.processed}/{item.total} запросов · {number(item.semanticCount)} строк · {{ running: "Сбор", exporting: "Создание Excel", waiting: "Ожидание квоты", completed: "Готово", paused: "Приостановлен", stopping: "Останавливаем", stopped: "Остановлен" }[item.status]}</span></button>)}</div></div>}
     </section></main>
   );
 }

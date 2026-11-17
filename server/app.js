@@ -1,5 +1,8 @@
 import express from "express";
 import path from "node:path";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { createExcel } from "./export.js";
 import { installAuth } from "./auth.js";
 import { createBatchStore, validId } from "./batches.js";
 import { requestWordstatTop, isWordstatConfigured, PHRASE_LIMIT } from "./wordstat.js";
@@ -37,14 +40,45 @@ export async function createApp(options) {
     if (!batch) return res.status(404).json({ error: "Запуск не найден" });
     res.json(store.view(batch));
   });
+  app.get("/api/wordstat/batch/:id/download", async (req, res, next) => {
+    const batch = store.get(req.params.id);
+    if (!validId(req.params.id) || !batch) return res.status(404).json({ error: "Запуск не найден" });
+    if (!batch.items.length) return res.status(409).json({ error: "Пока нет обработанных запросов для скачивания" });
+    // Freeze before yielding so ongoing collection cannot change this export's counts.
+    const snapshot = structuredClone(batch);
+    snapshot.partial = snapshot.status !== "completed";
+    snapshot.snapshotAt = new Date().toISOString();
+    let outputDir;
+    const cleanup = async () => {
+      if (outputDir && path.dirname(path.resolve(outputDir)) === path.resolve(tmpdir()) && path.basename(outputDir).startsWith("wordstat-download-")) {
+        await rm(outputDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {});
+      }
+    };
+    try {
+      // Export outside OneDrive, independently of the runner and its final Excel.
+      outputDir = await mkdtemp(path.join(tmpdir(), "wordstat-download-"));
+      const fileName = await createExcel(snapshot, path.join(options.exportsDir, snapshot.id), {
+        outputDir, fileName: `wordstat-${snapshot.id}-${snapshot.items.length}${snapshot.partial ? "-partial" : ""}.xlsx`,
+      });
+      res.download(path.join(outputDir, fileName), fileName, error => {
+        void cleanup();
+        if (error && !res.headersSent) next(error);
+      });
+    } catch (error) { await cleanup(); next(error); }
+  });
   app.post("/api/wordstat/batch/:id/resume", (req, res) => {
     const batch = store.get(req.params.id);
     if (!batch) return res.status(404).json({ error: "Запуск не найден" });
     if (!configured()) return res.status(503).json({ error: "Wordstat API не настроен" });
     if (store.busy() || app.locals.starting) return res.status(409).json({ error: "Другой сбор уже выполняется" });
-    if (batch.status !== "paused") return res.status(409).json({ error: "Этот запуск не приостановлен" });
+    if (!["paused", "stopped"].includes(batch.status)) return res.status(409).json({ error: "Этот запуск не приостановлен" });
     store.resume(batch);
     res.json(store.view(batch));
+  });
+  app.post("/api/wordstat/batch/:id/stop", async (req, res) => {
+    const batch = store.get(req.params.id);
+    if (!batch) return res.status(404).json({ error: "Запуск не найден" });
+    res.json(await store.stop(batch));
   });
   app.get("/api/files/:id/:fileName", (req, res) => {
     const batch = store.get(req.params.id);

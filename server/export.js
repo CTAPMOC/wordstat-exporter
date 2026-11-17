@@ -81,8 +81,18 @@ async function populateWorkbook(workbook, batch, directory, rowLimit, checkOutpu
       semantic([number, record.phrase, row.phrase, row.count, row.type, row.status, batch.regionName, record.collectedAt]);
     }
   }
+  if (batch.partial) {
+    const pending = workbook.addWorksheet("Не обработаны");
+    pending.columns = [{ header: "№", width: 8 }, { header: "Исходный запрос", width: 70 }, { header: "Статус", width: 24 }];
+    for (let index = batch.items.length; index < batch.queries.length; index++) {
+      pending.addRow([index + 1, batch.queries[index], "Ещё не обработан"]).commit();
+    }
+    pending.commit();
+  }
   const info = workbook.addWorksheet("О выгрузке");
   for (const row of [
+    ["Тип выгрузки", batch.partial ? "Промежуточная: сбор ещё не завершён" : "Итоговая"],
+    ["Снимок данных (UTC)", batch.snapshotAt || new Date().toISOString()],
     ["Период", "Последние 30 дней по данным Wordstat API"],
     ["Устройства", "Все устройства"],
     ["Регион", batch.regionName],
@@ -103,9 +113,10 @@ async function populateWorkbook(workbook, batch, directory, rowLimit, checkOutpu
 export async function createExcel(batch, directory, {
   rowLimit = 1048576,
   createOutput = createWriteStream,
+  outputDir = directory,
+  fileName = `wordstat-${batch.id}.xlsx`,
 } = {}) {
-  const fileName = `wordstat-${batch.id}.xlsx`;
-  const temporary = path.join(directory, `${fileName}.tmp`);
+  const temporary = path.join(outputDir, `${fileName}.tmp`);
   const output = createOutput(temporary);
   let workbook;
   let outputError;
@@ -135,7 +146,7 @@ export async function createExcel(batch, directory, {
     });
     await Promise.race([writing, outputFailure]);
     await outputDone;
-    await rename(temporary, path.join(directory, fileName));
+    await rename(temporary, path.join(outputDir, fileName));
     return fileName;
   } catch (error) {
     workbook?.zip.abort();
